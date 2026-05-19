@@ -49,11 +49,11 @@ export const comment = (() => {
      * @returns {void}
      */
     const changeActionButton = (id, disabled) => {
-        document.querySelector(`[data-button-action="${id}"]`).childNodes.forEach((e) => {
-            e.disabled = disabled;
-        });
+        const actionButton = document.querySelector(`[data-button-action="${id}"]`);
+        if (actionButton) {
+            actionButton.childNodes.forEach((e) => e.disabled = disabled);
+        }
     };
-
     /**
      * @param {string} id
      * @returns {void}
@@ -61,6 +61,9 @@ export const comment = (() => {
     const removeInnerForm = (id) => {
         changeActionButton(id, false);
         document.getElementById(`inner-${id}`).remove();
+        // Sau khi xóa form, cần đảm bảo nút "Reply" được kích hoạt lại nếu có
+        const replyButton = document.querySelector(`[data-button-action="${id}"] .btn-reply`);
+        if (replyButton) replyButton.disabled = false;
     };
 
     /**
@@ -68,26 +71,10 @@ export const comment = (() => {
      * @returns {void}
      */
     const showOrHide = (button) => {
-        const ids = button.getAttribute('data-uuids').split(',');
-        const isShow = button.getAttribute('data-show') === 'true';
-        const uuid = button.getAttribute('data-uuid');
-        const currentShow = showHide.get('show');
-
-        button.setAttribute('data-show', isShow ? 'false' : 'true');
-        button.innerText = isShow ? `Show replies (${ids.length})` : 'Hide replies';
-        showHide.set('show', isShow ? currentShow.filter((i) => i !== uuid) : [...currentShow, uuid]);
-
-        for (const id of ids) {
-            showHide.set('hidden', showHide.get('hidden').map((i) => {
-                if (i.uuid === id) {
-                    i.show = !isShow;
-                }
-
-                return i;
-            }));
-
-            document.getElementById(id).classList.toggle('d-none', isShow);
-        }
+        // Chức năng này liên quan đến bình luận lồng nhau, không được hỗ trợ bởi schema hiện tại.
+        // Có thể vô hiệu hóa hoặc xóa nếu không có parent_id trong bảng comments.
+        // Để giữ cho code không lỗi, tạm thời không làm gì.
+        console.warn("showOrHide function is not fully supported with current Supabase schema (no nested comments).");
     };
 
     /**
@@ -96,6 +83,7 @@ export const comment = (() => {
      * @returns {void}
      */
     const showMore = (anchor, uuid) => {
+        // Chức năng này vẫn hoạt động tốt với nội dung bình luận dài.
         const content = document.getElementById(`content-${uuid}`);
         const original = util.base64Decode(content.getAttribute('data-comment'));
         const isCollapsed = anchor.getAttribute('data-show') === 'false';
@@ -110,7 +98,7 @@ export const comment = (() => {
      * @returns {Promise<void>}
      */
     const fetchTracker = async (c) => {
-        if (c.comments) {
+        if (c.comments) { // Nếu có trường comments (cho bình luận lồng nhau), thì xử lý đệ quy
             await Promise.all(c.comments.map((v) => fetchTracker(v)));
         }
 
@@ -153,41 +141,41 @@ export const comment = (() => {
      * @param {ReturnType<typeof dto.getCommentsResponse>} items 
      * @param {ReturnType<typeof dto.commentShowMore>[]} hide 
      * @returns {ReturnType<typeof dto.commentShowMore>[]}
-     */
-    const traverse = (items, hide = []) => {
-        const dataShow = showHide.get('show');
+     */ // Chức năng này liên quan đến bình luận lồng nhau, sẽ không được sử dụng.
+    // const traverse = (items, hide = []) => {
+    //     const dataShow = showHide.get('show');
 
-        const buildHide = (lists) => lists.forEach((item) => {
-            if (hide.find((i) => i.uuid === item.uuid)) {
-                buildHide(item.comments);
-                return;
-            }
+    //     const buildHide = (lists) => lists.forEach((item) => {
+    //         if (hide.find((i) => i.uuid === item.uuid)) {
+    //             buildHide(item.comments);
+    //             return;
+    //         }
 
-            hide.push(dto.commentShowMore(item.uuid));
-            buildHide(item.comments);
-        });
+    //         hide.push(dto.commentShowMore(item.uuid));
+    //         buildHide(item.comments);
+    //     });
 
-        const setVisible = (lists) => lists.forEach((item) => {
-            if (!dataShow.includes(item.uuid)) {
-                setVisible(item.comments);
-                return;
-            }
+    //     const setVisible = (lists) => lists.forEach((item) => {
+    //         if (!dataShow.includes(item.uuid)) {
+    //             setVisible(item.comments);
+    //             return;
+    //         }
 
-            item.comments.forEach((c) => {
-                const i = hide.findIndex((h) => h.uuid === c.uuid);
-                if (i !== -1) {
-                    hide[i].show = true;
-                }
-            });
+    //         item.comments.forEach((c) => {
+    //             const i = hide.findIndex((h) => h.uuid === c.uuid);
+    //             if (i !== -1) {
+    //                 hide[i].show = true;
+    //             }
+    //         });
 
-            setVisible(item.comments);
-        });
+    //         setVisible(item.comments);
+    //     });
 
-        buildHide(items);
-        setVisible(items);
+    //     buildHide(items);
+    //     setVisible(items);
 
-        return hide;
-    };
+    //     return hide;
+    // };
 
     /**
      * @returns {Promise<ReturnType<typeof dto.getCommentsResponse>>}
@@ -204,29 +192,43 @@ export const comment = (() => {
             comments.innerHTML = card.renderLoading().repeat(pagination.getPer());
         }
 
-        return request(HTTP_GET, `/api/v2/comment?per=${pagination.getPer()}&next=${pagination.getNext()}&lang=${lang.getLanguage()}`)
+        // Supabase: Lấy comments và đếm likes
+        return request(HTTP_GET, `/comments?select=*,likes(id)&order=created_at.desc&limit=${pagination.getPer()}&offset=${pagination.getNext()}`)
             .token(session.getToken())
             .withCache(1000 * 30)
             .withForceCache()
-            .send(dto.getCommentsResponseV2)
-            .then(async (res) => {
+            .send() // Không cần DTO converter ở đây, xử lý trực tiếp response
+            .then(async ({ data: commentsData, headers }) => {
                 comments.setAttribute('data-loading', 'false');
 
                 for (const u of lastRender) {
                     await gif.remove(u);
                 }
 
-                if (res.data.lists.length === 0) {
+                if (commentsData.length === 0) {
                     comments.innerHTML = onNullComment();
-                    return res;
+                    return { data: { lists: [], count: 0 } }; // Trả về cấu trúc tương tự DTO cũ
                 }
 
-                const flatten = (ii) => ii.flatMap((i) => [i.uuid, ...flatten(i.comments)]);
-                lastRender.splice(0, lastRender.length, ...flatten(res.data.lists));
-                showHide.set('hidden', traverse(res.data.lists, showHide.get('hidden')));
+                // Chuyển đổi dữ liệu Supabase sang định dạng mong muốn của frontend
+                const processedComments = commentsData.map(c => ({
+                    uuid: c.id,
+                    name: c.name,
+                    is_presence: c.is_presence,
+                    content: c.content,
+                    gif_id: c.gif_id,
+                    created_at: c.created_at,
+                    likes: c.likes ? c.likes.length : 0, // Đếm số lượng likes
+                    is_admin: session.isAdmin(), // Giả định admin có thể xem tất cả
+                    is_parent: true, // Tất cả đều là bình luận cấp cao nhất
+                    // Không có trường 'own' từ Supabase, RLS sẽ xử lý quyền
+                }));
 
-                let data = await card.renderContentMany(res.data.lists);
-                if (res.data.lists.length < pagination.getPer()) {
+                lastRender.splice(0, lastRender.length, ...processedComments.map(c => c.uuid));
+                // showHide.set('hidden', traverse(processedComments, showHide.get('hidden'))); // Vô hiệu hóa traverse
+
+                let data = await card.renderContentMany(processedComments);
+                if (processedComments.length < pagination.getPer()) {
                     data += onNullComment();
                 }
 
@@ -235,15 +237,20 @@ export const comment = (() => {
                 lastRender.forEach((u) => {
                     like.addListener(u);
                 });
+                
+                // Lấy tổng số lượng từ header Content-Range của Supabase
+                const contentRange = headers.get('Content-Range');
+                const totalCount = contentRange ? parseInt(contentRange.split('/')[1], 10) : commentsData.length;
 
-                return res;
+                return { data: { lists: processedComments, count: totalCount } };
             })
-            .then(async (res) => {
+            .then(async (result) => {
                 comments.dispatchEvent(new Event('undangan.comment.result'));
 
-                if (res.data.lists && session.isAdmin()) {
-                    await Promise.all(res.data.lists.map((v) => fetchTracker(v)));
-                }
+                // fetchTracker chỉ cần cho bình luận cấp cao nhất
+                // if (result.data.lists && session.isAdmin()) {
+                //     await Promise.all(result.data.lists.map((v) => fetchTracker(v)));
+                // }
 
                 pagination.setTotal(res.data.count);
                 comments.dispatchEvent(new Event('undangan.comment.done'));
@@ -262,35 +269,35 @@ export const comment = (() => {
 
         const id = button.getAttribute('data-uuid');
 
-        if (session.isAdmin()) {
-            owns.set(id, button.getAttribute('data-own'));
-        }
+        // Với RLS của Supabase, 'own' không còn cần thiết theo cách này.
+        // Chúng ta chỉ cần ID của bình luận để xóa.
+        owns.set(id, id); // Lưu ID của bình luận vào owns để sử dụng cho DELETE/PATCH
 
         changeActionButton(id, true);
         const btn = util.disableButton(button);
-        const likes = like.getButtonLike(id);
+        const likes = like.getButtonLike(id); // Lấy nút like
         likes.disabled = true;
 
-        const status = await request(HTTP_DELETE, '/api/comment/' + owns.get(id))
+        // Supabase: DELETE /comments?id=eq.{id}
+        const { data: statusResponse } = await request(HTTP_DELETE, `/comments?id=eq.${owns.get(id)}`)
             .token(session.getToken())
-            .send(dto.statusResponse)
-            .then((res) => res.data.status);
+            .send();
 
-        if (!status) {
+        if (!statusResponse || statusResponse.data.status === false) { // Supabase trả về mảng rỗng nếu thành công
             btn.restore();
             likes.disabled = false;
             changeActionButton(id, false);
             return;
         }
 
-        document.querySelectorAll('a[onclick="undangan.comment.showOrHide(this)"]').forEach((n) => {
-            const oldUuids = n.getAttribute('data-uuids').split(',');
-
-            if (oldUuids.includes(id)) {
-                const uuids = oldUuids.filter((i) => i !== id).join(',');
-                uuids.length === 0 ? n.remove() : n.setAttribute('data-uuids', uuids);
-            }
-        });
+        // Logic liên quan đến bình luận lồng nhau (showOrHide) sẽ bị loại bỏ
+        // document.querySelectorAll('a[onclick="undangan.comment.showOrHide(this)"]').forEach((n) => {
+        //     const oldUuids = n.getAttribute('data-uuids').split(',');
+        //     if (oldUuids.includes(id)) {
+        //         const uuids = oldUuids.filter((i) => i !== id).join(',');
+        //         uuids.length === 0 ? n.remove() : n.setAttribute('data-uuids', uuids);
+        //     }
+        // });
 
         owns.unset(id);
         document.getElementById(id).remove();
@@ -348,11 +355,11 @@ export const comment = (() => {
 
         const btn = util.disableButton(button);
 
-        const status = await request(HTTP_PUT, `/api/comment/${owns.get(id)}?lang=${lang.getLanguage()}`)
+        // Supabase: PATCH /comments?id=eq.{id}
+        const { data: statusResponse } = await request(HTTP_PATCH, `/comments?id=eq.${owns.get(id)}`)
             .token(session.getToken())
             .body(dto.updateCommentRequest(presence ? isPresent : null, gifIsOpen ? null : form.value, gifId))
-            .send(dto.statusResponse)
-            .then((res) => res.data.status);
+            .send();
 
         if (form) {
             form.disabled = false;
@@ -372,7 +379,7 @@ export const comment = (() => {
             gifCancel.show();
         }
 
-        if (!status) {
+        if (!statusResponse || statusResponse.data.status === false) { // Supabase trả về mảng rỗng nếu thành công
             return;
         }
 
@@ -516,11 +523,10 @@ export const comment = (() => {
 
         btn.restore();
 
-        if (!response || response.code !== HTTP_STATUS_CREATED) {
+        if (!responseData || responseData.length === 0) { // Supabase POST trả về mảng các đối tượng đã tạo, nếu rỗng là lỗi
             return;
         }
-
-        owns.set(response.data.uuid, response.data.own);
+        const newComment = responseData[0]; // Lấy đối tượng bình luận đầu tiên
 
         if (form) {
             form.value = null;
@@ -530,6 +536,7 @@ export const comment = (() => {
             gifCancel.click();
         }
 
+        owns.set(newComment.id, newComment.id); // Lưu ID của bình luận
         if (!id) {
             if (pagination.reset()) {
                 await show();
@@ -542,40 +549,41 @@ export const comment = (() => {
                 comments.lastElementChild.remove();
             }
 
-            response.data.is_parent = true;
-            response.data.is_admin = session.isAdmin();
-            comments.insertAdjacentHTML('afterbegin', await card.renderContentMany([response.data]));
+            // Chuyển đổi định dạng cho frontend
+            const processedNewComment = {
+                uuid: newComment.id,
+                name: newComment.name,
+                is_presence: newComment.is_presence,
+                content: newComment.content,
+                gif_id: newComment.gif_id,
+                created_at: newComment.created_at,
+                likes: 0, // Bình luận mới chưa có likes
+                is_admin: session.isAdmin(),
+                is_parent: true, // Luôn là bình luận cấp cao nhất
+            };
+
+            comments.insertAdjacentHTML('afterbegin', await card.renderContentMany([processedNewComment]));
             comments.scrollIntoView();
         }
 
-        if (id) {
-            showHide.set('hidden', showHide.get('hidden').concat([dto.commentShowMore(response.data.uuid, true)]));
-            showHide.set('show', showHide.get('show').concat([id]));
+        // Logic cho bình luận lồng nhau (reply) bị loại bỏ do schema Supabase không hỗ trợ
+        // if (id) {
+        //     removeInnerForm(id);
+        //     // ... (logic cũ cho reply)
+        // }
 
-            removeInnerForm(id);
+        like.addListener(newComment.id);
+        lastRender.push(newComment.id);
+    };
 
-            response.data.is_parent = false;
-            response.data.is_admin = session.isAdmin();
-            document.getElementById(`reply-content-${id}`).insertAdjacentHTML('beforeend', await card.renderContentSingle(response.data));
-
-            const anchorTag = document.getElementById(`button-${id}`).querySelector('a');
-            if (anchorTag) {
-                if (anchorTag.getAttribute('data-show') === 'false') {
-                    showOrHide(anchorTag);
-                }
-
-                anchorTag.remove();
-            }
-
-            const uuids = [response.data.uuid];
-            const readMoreElement = document.createRange().createContextualFragment(card.renderReadMore(id, anchorTag ? anchorTag.getAttribute('data-uuids').split(',').concat(uuids) : uuids));
-
-            const buttonLike = like.getButtonLike(id);
-            buttonLike.parentNode.insertBefore(readMoreElement, buttonLike);
-        }
-
-        like.addListener(response.data.uuid);
-        lastRender.push(response.data.uuid);
+    /**
+     * @param {string} uuid 
+     * @returns {void}
+     */
+    const reply = (uuid) => {
+        // Chức năng reply bị vô hiệu hóa do schema Supabase không hỗ trợ bình luận lồng nhau.
+        util.notify('Chức năng trả lời bình luận hiện không được hỗ trợ.').info();
+        console.warn(`Reply function for comment ${uuid} is disabled as nested comments are not supported by the current Supabase schema.`);
     };
 
     /**
@@ -608,30 +616,17 @@ export const comment = (() => {
     };
 
     /**
-     * @param {string} uuid 
-     * @returns {void}
-     */
-    const reply = (uuid) => {
-        changeActionButton(uuid, true);
-
-        gif.remove(uuid).then(() => {
-            gif.onOpen(uuid, () => gif.removeGifSearch(uuid));
-            document.getElementById(`button-${uuid}`).insertAdjacentElement('afterend', card.renderReply(uuid));
-        });
-    };
-
-    /**
      * @param {HTMLButtonElement} button 
      * @param {boolean} is_parent
      * @returns {Promise<void>}
      */
     const edit = async (button, is_parent) => {
         const id = button.getAttribute('data-uuid');
-
         changeActionButton(id, true);
 
-        if (session.isAdmin()) {
-            owns.set(id, button.getAttribute('data-own'));
+        // Với RLS của Supabase, 'own' không còn cần thiết theo cách này.
+        if (!owns.has(id)) { // Nếu chưa có trong owns, lưu ID của bình luận
+            owns.set(id, id);
         }
 
         const badge = document.getElementById(`badge-${id}`);
@@ -642,7 +637,7 @@ export const comment = (() => {
             await gif.remove(id);
         }
 
-        const isParent = is_parent && !session.isAdmin();
+        const isParent = is_parent; // is_parent sẽ luôn là true vì không có bình luận lồng nhau
         document.getElementById(`button-${id}`).insertAdjacentElement('afterend', card.renderSửa(id, isChecklist, isParent, !!gifImage));
 
         if (gifImage) {
@@ -678,7 +673,7 @@ export const comment = (() => {
         showHide = storage('comment');
 
         if (!showHide.has('hidden')) {
-            showHide.set('hidden', []);
+            showHide.set('hidden', []); // Vẫn giữ để tránh lỗi, nhưng sẽ không được sử dụng
         }
 
         if (!showHide.has('show')) {
