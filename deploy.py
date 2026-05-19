@@ -158,7 +158,7 @@ def deploy():
     print("========================================================")
     print(f"{Colors.ENDC}")
 
-    repo_url = "git@github.com:d4m-dev/WeddingInvitation.com.git"
+    repo_url = "git@github.com:d4m-dev/WeddingInvitation-v2.0.com.git"
     
     # 1. Kiểm tra Git Init
     if not os.path.exists(".git"):
