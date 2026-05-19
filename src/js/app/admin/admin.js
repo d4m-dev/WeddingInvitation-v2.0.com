@@ -34,13 +34,31 @@ export const admin = (() => {
         storage('config').set('tenor_key', res.data.tenor_key);
         document.dispatchEvent(new Event('undangan.session'));
 
-        request(HTTP_GET, '/api/stats').token(session.getToken()).withCache(1000 * 30).withForceCache().send().then((resp) => {
-            document.getElementById('count-comment').textContent = String(resp.data.comments).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-            document.getElementById('count-like').textContent = String(resp.data.likes).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-            document.getElementById('count-present').textContent = String(resp.data.present).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-            document.getElementById('count-absent').textContent = String(resp.data.absent).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-        });
+        // Thay thế /api/stats bằng các truy vấn Supabase trực tiếp
+        Promise.all([
+            request(HTTP_GET, '/comments?count=exact').token(session.getToken()).withCache(1000 * 30).withForceCache().send(),
+            request(HTTP_GET, '/comments?is_presence=eq.true&count=exact').token(session.getToken()).withCache(1000 * 30).withForceCache().send(),
+            request(HTTP_GET, '/comments?is_presence=eq.false&count=exact').token(session.getToken()).withCache(1000 * 30).withForceCache().send(),
+            request(HTTP_GET, '/likes?count=exact').token(session.getToken()).withCache(1000 * 30).withForceCache().send(),
+        ]).then(([commentsRes, presentRes, absentRes, likesRes]) => {
+            const getCountFromHeaders = (headers) => {
+                const contentRange = headers.get('Content-Range');
+                return contentRange ? parseInt(contentRange.split('/')[1], 10) : 0;
+            };
 
+            const commentCount = getCountFromHeaders(commentsRes.headers);
+            const presentCount = getCountFromHeaders(presentRes.headers);
+            const absentCount = getCountFromHeaders(absentRes.headers);
+            const likeCount = getCountFromHeaders(likesRes.headers);
+
+            document.getElementById('count-comment').textContent = String(commentCount).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+            document.getElementById('count-present').textContent = String(presentCount).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+            document.getElementById('count-absent').textContent = String(absentCount).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+            document.getElementById('count-like').textContent = String(likeCount).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+        }).catch(error => {
+            console.error("Error fetching stats from Supabase:", error);
+            util.notify('Không thể tải số liệu thống kê.').error();
+        });
         comment.show();
     });
 
@@ -52,13 +70,15 @@ export const admin = (() => {
     const changeCheckboxValue = (checkbox, type) => {
         const label = util.disableCheckbox(checkbox);
 
-        request(HTTP_PATCH, '/api/user')
+        // Supabase: PATCH /profiles?id=eq.{user_id}
+        // Cần có Supabase Auth để lấy user_id và JWT hợp lệ.
+        request(HTTP_PATCH, `/profiles?id=eq.${session.getUserId()}`) // Giả định session.getUserId() trả về UUID của người dùng
             .token(session.getToken())
             .body({ [type]: checkbox.checked })
             .send()
             .finally(() => label.restore());
     };
-
+    
     /**
      * @param {HTMLButtonElement} button
      * @returns {void}
@@ -69,10 +89,12 @@ export const admin = (() => {
         const form = document.getElementById('dashboard-tenorkey');
         form.disabled = true;
 
-        request(HTTP_PATCH, '/api/user')
+        // Supabase: PATCH /profiles?id=eq.{user_id}
+        // Cần có Supabase Auth để lấy user_id và JWT hợp lệ.
+        request(HTTP_PATCH, `/profiles?id=eq.${session.getUserId()}`) // Giả định session.getUserId() trả về UUID của người dùng
             .token(session.getToken())
             .body({ tenor_key: form.value.length ? form.value : null })
-            .send()
+            .send() // Supabase PATCH trả về mảng rỗng nếu thành công
             .then(() => util.notify(`thành công ${form.value.length ? 'thêm' : 'xóa'} khóa tenor`).success())
             .finally(() => {
                 form.disabled = false;
@@ -86,22 +108,23 @@ export const admin = (() => {
      */
     const regenerate = (button) => {
         if (!util.ask('Are you sure?')) {
-            return;
+            return; // Chức năng này cần một Supabase Edge Function hoặc một backend tùy chỉnh.
         }
 
-        const btn = util.disableButton(button);
+        util.notify('Chức năng tạo lại khóa truy cập không được hỗ trợ trực tiếp bởi Supabase PostgREST.').info();
+        console.warn("Regenerate access key function requires a custom Supabase Edge Function or a separate backend service.");
 
-        request(HTTP_PUT, '/api/key')
-            .token(session.getToken())
-            .send(dto.statusResponse)
-            .then((res) => {
-                if (!res.data.status) {
-                    return;
-                }
-
-                getUserStats();
-            })
-            .finally(() => btn.restore());
+        // const btn = util.disableButton(button);
+        // request(HTTP_PUT, '/api/key') // API này không có trong Supabase PostgREST
+        //     .token(session.getToken())
+        //     .send(dto.statusResponse)
+        //     .then((res) => {
+        //         if (!res.data.status) {
+        //             return;
+        //         }
+        //         getUserStats();
+        //     })
+        //     .finally(() => btn.restore());
     };
 
     /**
@@ -120,30 +143,30 @@ export const admin = (() => {
         old.disabled = true;
         newest.disabled = true;
 
-        const btn = util.disableButton(button);
+        util.notify('Chức năng đổi mật khẩu cần sử dụng Supabase Authentication SDK.').info();
+        console.warn("Change password function requires Supabase Authentication SDK.");
 
-        request(HTTP_PATCH, '/api/user')
-            .token(session.getToken())
-            .body({
-                old_password: old.value,
-                new_password: newest.value,
-            })
-            .send(dto.statusResponse)
-            .then((res) => {
-                if (!res.data.status) {
-                    return;
-                }
-
-                old.value = null;
-                newest.value = null;
-                util.notify('Đổi mật khẩu thành công').success();
-            })
-            .finally(() => {
-                btn.restore(true);
-
-                old.disabled = false;
-                newest.disabled = false;
-            });
+        // const btn = util.disableButton(button);
+        // request(HTTP_PATCH, '/api/user') // API này không có trong Supabase PostgREST
+        //     .token(session.getToken())
+        //     .body({
+        //         old_password: old.value,
+        //         new_password: newest.value,
+        //     })
+        //     .send(dto.statusResponse)
+        //     .then((res) => {
+        //         if (!res.data.status) {
+        //             return;
+        //         }
+        //         old.value = null;
+        //         newest.value = null;
+        //         util.notify('Đổi mật khẩu thành công').success();
+        //     })
+        //     .finally(() => {
+        //         btn.restore(true);
+        //         old.disabled = false;
+        //         newest.disabled = false;
+        //     });
     };
 
     /**
@@ -161,10 +184,12 @@ export const admin = (() => {
         name.disabled = true;
         const btn = util.disableButton(button);
 
-        request(HTTP_PATCH, '/api/user')
+        // Supabase: PATCH /profiles?id=eq.{user_id}
+        // Cần có Supabase Auth để lấy user_id và JWT hợp lệ.
+        request(HTTP_PATCH, `/profiles?id=eq.${session.getUserId()}`) // Giả định session.getUserId() trả về UUID của người dùng
             .token(session.getToken())
             .body({ name: name.value })
-            .send(dto.statusResponse)
+            .send() // Supabase PATCH trả về mảng rỗng nếu thành công
             .then((res) => {
                 if (!res.data.status) {
                     return;
@@ -184,13 +209,14 @@ export const admin = (() => {
      * @returns {void}
      */
     const download = (button) => {
-        const btn = util.disableButton(button);
-        request(HTTP_GET, '/api/download')
-            .token(session.getToken())
-            .withDownload('download', 'csv')
-            .send()
-            .finally(() => btn.restore());
-    };
+        // Chức năng download yêu cầu một Supabase Edge Function hoặc một backend tùy chỉnh.
+        // Hiện tại, nó sẽ bị vô hiệu hóa.
+        util.notify('Chức năng tải xuống hiện không được hỗ trợ trực tiếp bởi Supabase PostgREST.').info();
+        console.warn("Download function requires a custom Supabase Edge Function or a separate backend service.");
+        // const btn = util.disableButton(button);
+        // // ... (logic cũ)
+        // btn.restore();
+    }; // Vô hiệu hóa chức năng download
 
     /**
      * @returns {void}
@@ -279,10 +305,12 @@ export const admin = (() => {
         tz.disabled = true;
         const btn = util.disableButton(button);
 
-        request(HTTP_PATCH, '/api/user')
+        // Supabase: PATCH /profiles?id=eq.{user_id}
+        // Cần có Supabase Auth để lấy user_id và JWT hợp lệ.
+        request(HTTP_PATCH, `/profiles?id=eq.${session.getUserId()}`) // Giả định session.getUserId() trả về UUID của người dùng
             .token(session.getToken())
             .body({ tz: tz.value })
-            .send(dto.statusResponse)
+            .send() // Supabase PATCH trả về mảng rỗng nếu thành công
             .then((res) => {
                 if (!res.data.status) {
                     return;
