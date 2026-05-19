@@ -1,474 +1,123 @@
+import { util } from '../common/util.js';
+import { session } from '../common/session.js';
+
 export const HTTP_GET = 'GET';
-export const HTTP_PUT = 'PUT';
 export const HTTP_POST = 'POST';
+export const HTTP_PUT = 'PUT'; // Supabase PostgREST thường dùng PATCH cho cập nhật, nhưng PUT cũng được hỗ trợ cho thay thế hoàn toàn.
 export const HTTP_PATCH = 'PATCH';
-export const HTTP_DELETE = 'DELETE';
-
-export const HTTP_STATUS_OK = 200;
-export const HTTP_STATUS_CREATED = 201;
 export const HTTP_STATUS_PARTIAL_CONTENT = 206;
-export const HTTP_STATUS_INTERNAL_SERVER_ERROR = 500;
-
+export const HTTP_STATUS_OK = 200;
 export const ERROR_ABORT = 'AbortError';
-export const ERROR_TYPE = 'TypeError';
+export const HTTP_DELETE = 'DELETE';
+export const HTTP_STATUS_CREATED = 201;
 
-export const defaultJSON = {
-    'Accept': 'application/json',
-    'Content-Type': 'application/json'
-};
+const API_URL = document.body.getAttribute('data-supabase-url'); // Lấy từ data-supabase-url
+const API_KEY = document.body.getAttribute('data-key'); // Lấy từ data-key
 
-export const cacheRequest = 'request';
+class RequestBuilder {
+    constructor(method, path) {
+        this.method = method;
+        this.path = path;
+        this.headers = new Headers({
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'apikey': API_KEY,
+            'Authorization': `Bearer ${API_KEY}` // Sử dụng API_KEY cho Authorization header
+        });
+        this.bodyData = null;
+        this.tokenValue = null; // Giữ lại cho các trường hợp JWT Auth trong tương lai
+        this.cacheDuration = 0;
+        this.forceCache = false;
+        this.retryCount = 0;
+        this.downloadFilename = null;
+        this.downloadExtension = null;
+    }
 
-export const pool = (() => {
-    /**
-     * @type {Map<string, Cache>|null}
-     */
-    let cachePool = null;
-
-    return {
-        /**
-         * @param {string} name
-         * @returns {Cache}
-         */
-        getInstance: (name) => {
-            if (!cachePool || !cachePool.has(name)) {
-                throw new Error(`vui lòng khởi tạo cache trước: ${name}`);
-            }
-
-            return cachePool.get(name);
-        },
-        /**
-         * @param {string} name 
-         * @returns {Promise<void>}
-         */
-        restart: async (name) => {
-            cachePool.set(name, null);
-            cachePool.delete(name);
-            await window.caches.delete(name);
-            await window.caches.open(name).then((c) => cachePool.set(name, c));
-        },
-        /**
-         * @param {function} callback
-         * @param {string[]} lists 
-         * @returns {void}
-         */
-        init: (callback, lists = []) => {
-            if (!window.isSecureContext) {
-                throw new Error('ứng dụng này yêu cầu kết nối bảo mật (HTTPS)');
-            }
-
-            cachePool = new Map();
-            Promise.all(lists.concat([cacheRequest]).map((v) => window.caches.open(v).then((c) => cachePool.set(v, c)))).then(() => callback());
-        },
-    };
-})();
-
-/**
- * @param {string} cacheName 
- */
-export const cacheWrapper = (cacheName) => {
-    const cacheObject = pool.getInstance(cacheName);
-
-    /**
-     * @param {string|URL} input 
-     * @param {Response} res 
-     * @param {boolean} forceCache
-     * @param {number} ttl
-     * @returns {Promise<Response>}
-     */
-    const set = (input, res, forceCache, ttl) => res.clone().arrayBuffer().then((ab) => {
-        if (!res.ok) {
-            return res;
+    token(token) {
+        // Nếu có JWT token (ví dụ từ Supabase Auth), nó sẽ ghi đè API_KEY trong Authorization
+        if (token && token !== API_KEY) { // Tránh ghi đè nếu token là chính API_KEY
+            this.headers.set('Authorization', `Bearer ${token}`);
         }
+        this.tokenValue = token;
+        return this;
+    }
 
-        const now = new Date();
-        const headers = new Headers(res.headers);
+    body(data) {
+        this.bodyData = data;
+        return this;
+    }
 
-        if (!headers.has('Date')) {
-            headers.set('Date', now.toUTCString());
-        }
+    withCache(duration) {
+        this.cacheDuration = duration;
+        return this;
+    }
 
-        if (forceCache || !headers.has('Cache-Control')) {
-            if (!forceCache && headers.has('Expires')) {
-                const expTime = new Date(headers.get('Expires'));
-                ttl = Math.max(0, expTime.getTime() - now.getTime());
-            }
+    withForceCache() {
+        this.forceCache = true;
+        return this;
+    }
 
-            if (ttl === 0) {
-                throw new Error('Thời gian lưu trữ cache tối đa không thể bằng 0');
-            }
+    withRetry(count = 3) {
+        this.retryCount = count;
+        return this;
+    }
 
-            headers.set('Cache-Control', `public, max-age=${Math.floor(ttl / 1000)}`);
-        }
+    withDownload(filename, extension) {
+        this.downloadFilename = filename;
+        this.downloadExtension = extension;
+        return this;
+    }
 
-        if (!headers.has('Content-Length')) {
-            headers.set('Content-Length', String(ab.byteLength));
-        }
-
-        return cacheObject.put(input, new Response(ab, { headers })).then(() => res);
-    });
-
-    /**
-     * @param {string|URL} input 
-     * @returns {Promise<Response|null>}
-     */
-    const has = (input) => cacheObject.match(input).then((res) => {
-        if (!res) {
-            return null;
-        }
-
-        const maxAge = res.headers.get('Cache-Control').match(/max-age=(\d+)/)[1];
-        const expTime = Date.parse(res.headers.get('Date')) + (parseInt(maxAge) * 1000);
-
-        return Date.now() > expTime ? null : res;
-    });
-
-    /**
-     * @param {string|URL} input 
-     * @returns {Promise<boolean>}
-     */
-    const del = (input) => cacheObject.delete(input);
-
-    return {
-        set,
-        has,
-        del,
-    };
-};
-
-/**
- * @param {string} method 
- * @param {string} path 
- */
-export const request = (method, path) => {
-
-    const ac = new AbortController();
-    const req = {
-        signal: ac.signal,
-        credential: 'include',
-        headers: new Headers(defaultJSON),
-        method: String(method).toUpperCase(),
-    };
-
-    let reqTtl = 0;
-    let reqRetry = 0;
-    let reqDelay = 0;
-    let reqAttempts = 0;
-    let reqNoBody = false;
-    let reqForceCache = false;
-
-    /**
-     * @type {string|null}
-     */
-    let downExt = null;
-
-    /**
-    * @type {string|null}
-    */
-    let downName = null;
-
-    /**
-    * @type {function|null}
-    */
-    let callbackFunc = null;
-
-    /**
-     * @param {string|URL} input 
-     * @returns {Promise<Response>}
-     */
-    const baseFetch = (input) => {
-
-        /**
-         * @returns {Promise<Response>}
-         */
-        const abstractFetch = () => {
-
-            /**
-             * @returns {Promise<Response>}
-             */
-            const wrapperFetch = () => window.fetch(input, req).then(async (res) => {
-                if (reqNoBody) {
-                    ac.abort();
-                    return new Response(null, {
-                        status: res.status,
-                        statusText: res.statusText,
-                        headers: new Headers(res.headers),
-                    });
-                }
-
-                if (!res.ok || !callbackFunc) {
-                    return res;
-                }
-
-                const contentLength = parseInt(res.headers.get('Content-Length') ?? 0);
-                if (contentLength === 0) {
-                    return res;
-                }
-
-                const chunks = [];
-                let receivedLength = 0;
-                const reader = res.body.getReader();
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) {
-                        break;
-                    }
-
-                    chunks.push(value);
-                    receivedLength += value.length;
-
-                    await callbackFunc(receivedLength, contentLength, window.structuredClone ? window.structuredClone(chunks) : chunks);
-                }
-
-                const contentType = res.headers.get('Content-Type') ?? 'application/octet-stream';
-                return new Response(new Blob(chunks, { type: contentType }), {
-                    status: res.status,
-                    statusText: res.statusText,
-                    headers: new Headers(res.headers),
-                });
-            });
-
-            if (reqTtl === 0 || reqNoBody) {
-                return wrapperFetch();
-            }
-
-            if (req.method !== HTTP_GET) {
-                console.warn('Chỉ phương thức GET mới có thể được lưu cache');
-                return wrapperFetch();
-            }
-
-            const cw = cacheWrapper(cacheRequest);
-
-            return cw.has(input).then((res) => {
-                if (res) {
-                    return Promise.resolve(res);
-                }
-
-                return cw.del(input).then(wrapperFetch).then((r) => cw.set(input, r, reqForceCache, reqTtl));
-            });
+    async send(dtoConverter = (res) => res) {
+        const url = `${API_URL}${this.path}`;
+        const ac = new AbortController();
+        const reqOptions = {
+            signal: ac.signal,
+            headers: this.headers,
+            method: this.method,
         };
 
-        if (reqRetry === 0 || reqDelay === 0) {
-            return abstractFetch();
+        if (this.bodyData) {
+            reqOptions.body = JSON.stringify(this.bodyData);
         }
 
-        /**
-         * @returns {Promise<Response>}
-         */
-        const attempt = async () => {
+        let response;
+        for (let i = 0; i <= this.retryCount; i++) {
             try {
-                return await abstractFetch();
+                response = await fetch(url, reqOptions);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status} - ${await response.text()}`);
+                }
+                break;
             } catch (error) {
-                if (error.name === ERROR_ABORT) {
+                if (i === this.retryCount) {
                     throw error;
                 }
-
-                reqDelay *= 2;
-                reqAttempts++;
-
-                if (reqAttempts > reqRetry) {
-                    throw new Error(`Đã đạt số lần thử tối đa: ${error}`);
-                }
-
-                console.warn(`Đang thử tải lại (${reqAttempts}/${reqRetry}): ${input.toString()}`);
-                await new Promise((resolve) => window.setTimeout(resolve, reqDelay));
-
-                return attempt();
+                console.warn(`Request failed, retrying (${i + 1}/${this.retryCount}):`, error);
+                await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // Tăng thời gian chờ
             }
-        };
-
-        return attempt();
-    };
-
-    /**
-     * @param {Response} res 
-     * @returns {Promise<Response>}
-     */
-    const baseDownload = (res) => {
-        if (res.status !== HTTP_STATUS_OK) {
-            return Promise.resolve(res);
         }
 
-        const exist = document.querySelector('a[download]');
-        if (exist) {
-            document.body.removeChild(exist);
+        if (this.downloadFilename) {
+            const blob = await response.blob();
+            const downloadUrl = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = downloadUrl;
+            a.download = `${this.downloadFilename}.${this.downloadExtension}`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(downloadUrl);
+            return { data: { status: true }, headers: response.headers }; // Giả lập thành công cho download
         }
 
-        const filename = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1];
+        const jsonResponse = await response.json();
+        return { data: dtoConverter(jsonResponse), headers: response.headers };
+    }
 
-        return res.clone().blob().then((b) => {
-            const link = document.createElement('a');
-            const href = window.URL.createObjectURL(b);
+    default() {
+        return this;
+    }
+}
 
-            link.href = href;
-            link.download = filename ? filename : `${downName}.${downExt ? downExt : (b.type.split('/')?.[1] ?? 'bin')}`;
-
-            document.body.appendChild(link);
-
-            link.click();
-
-            document.body.removeChild(link);
-            window.URL.revokeObjectURL(href);
-
-            return res;
-        });
-    };
-
-    return {
-        /**
-         * @template T
-         * @param {((data: any) => T)=} transform
-         * @returns {Promise<{code: number, data: T, error: string[]|null}>}
-         */
-        send(transform = null) {
-            if (downName) {
-                Object.keys(defaultJSON).forEach((k) => req.headers.delete(k));
-            }
-
-            return baseFetch(new URL(path, document.body.getAttribute('data-url'))).then((res) => {
-                if (downName && res.ok) {
-                    return baseDownload(res).then((r) => ({
-                        code: r.status,
-                        data: r,
-                        error: null,
-                    }));
-                }
-
-                return res.json().then((json) => {
-                    if (json.error) {
-                        const msg = json.error.at(0);
-                        const isErrServer = res.status >= HTTP_STATUS_INTERNAL_SERVER_ERROR;
-
-                        throw new Error(isErrServer ? `ID: ${json.id}\n🟥 ${msg}` : `🟨 ${msg}`);
-                    }
-
-                    if (transform) {
-                        json.data = transform(json.data);
-                    }
-
-                    return Object.assign(json, { code: res.status });
-                });
-            }).catch((err) => {
-                if (err.name === ERROR_ABORT) {
-                    console.warn('Tải dữ liệu đã bị hủy:', err);
-                    return err;
-                }
-
-                if (err.name === ERROR_TYPE) {
-                    err = new Error('🟥 Lỗi mạng hoặc vượt quá giới hạn truy cập');
-                }
-
-                alert(err.message ?? String(err));
-                throw err;
-            });
-        },
-        /**
-         * @param {number} [ttl=21600000]
-         * @returns {ReturnType<typeof request>}
-         */
-        withCache(ttl = 1000 * 60 * 60 * 6) {
-            reqTtl = ttl;
-
-            return this;
-        },
-        /**
-         * @param {number} [ttl=21600000]
-         * @returns {ReturnType<typeof request>}
-         */
-        withForceCache(ttl = 1000 * 60 * 60 * 6) {
-            reqForceCache = true;
-            if (reqTtl === 0) {
-                reqTtl = ttl;
-            }
-
-            return this;
-        },
-        /**
-         * @returns {ReturnType<typeof request>}
-         */
-        withNoBody() {
-            reqNoBody = true;
-
-            return this;
-        },
-        /**
-         * @param {number} [maxRetries=3]
-         * @param {number} [delay=1000]
-         * @returns {ReturnType<typeof request>}
-         */
-        withRetry(maxRetries = 3, delay = 1000) {
-            reqRetry = maxRetries;
-            reqDelay = delay;
-
-            return this;
-        },
-        /**
-         * @param {Promise<void>|null} cancel
-         * @returns {ReturnType<typeof request>}
-         */
-        withCancel(cancel) {
-            if (cancel === null || cancel === undefined) {
-                return this;
-            }
-
-            (async () => {
-                await cancel;
-                ac.abort();
-            })();
-
-            return this;
-        },
-        /**
-         * @param {string} name 
-         * @param {string|null} ext
-         * @returns {ReturnType<typeof request>}
-         */
-        withDownload(name, ext = null) {
-            downName = name;
-            downExt = ext;
-            return this;
-        },
-        /**
-         * @param {function|null} [func=null]
-         * @returns {ReturnType<typeof request>}
-         */
-        withProgressFunc(func = null) {
-            callbackFunc = func;
-            return this;
-        },
-        /**
-         * @param {object|null} header 
-         * @returns {Promise<Response>}
-         */
-        default(header = null) {
-            req.headers = new Headers(header ?? {});
-            return baseFetch(path).then((res) => downName ? baseDownload(res) : Promise.resolve(res));
-        },
-        /**
-         * @param {string} token
-         * @returns {ReturnType<typeof request>}
-         */
-        token(token) {
-            if (token.split('.').length === 3) {
-                req.headers.append('Authorization', 'Bearer ' + token);
-                return this;
-            }
-
-            req.headers.append('x-access-key', token);
-            return this;
-        },
-        /**
-         * @param {object} body
-         * @returns {ReturnType<typeof request>}
-         */
-        body(body) {
-            if (req.method === HTTP_GET) {
-                throw new Error('Phương thức GET không hỗ trợ body');
-            }
-
-            req.body = JSON.stringify(body);
-            return this;
-        },
-    };
-};
+export const request = (method, path) => new RequestBuilder(method, path);
