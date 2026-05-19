@@ -2,7 +2,7 @@ import { util } from '../../common/util.js';
 import { lang } from '../../common/language.js';
 import { storage } from '../../common/storage.js';
 import { cache } from '../../connection/cache.js';
-import { request, defaultJSON, ERROR_ABORT, HTTP_GET } from '../../connection/request.js';
+import { request, ERROR_ABORT, HTTP_GET } from '../../connection/request.js';
 
 export const gif = (() => {
 
@@ -183,8 +183,8 @@ export const gif = (() => {
         ctx.last = request(HTTP_GET, `https://tenor.googleapis.com/v2${path}?${param}`)
             .withCache()
             .withRetry()
-            .withCancel(reqCancel)
-            .default(defaultJSON)
+            .withCancel(reqCancel) // Headers đã được thiết lập trong RequestBuilder constructor
+            .default()
             .then((r) => r.json())
             .then((j) => {
                 if (j.error) {
