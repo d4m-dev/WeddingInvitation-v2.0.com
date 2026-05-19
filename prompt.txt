@@ -1,0 +1,104 @@
+Để chuyển đổi (migrate) backend hiện tại sang Supabase, chúng ta sẽ sử dụng tính năng PostgREST (REST API tự động sinh ra từ database) của Supabase. Việc này có nghĩa là bạn không cần viết code backend nữa, chỉ cần tạo bảng (Tables) trên Supabase, và Supabase sẽ tự động cung cấp các API như GET, POST, PATCH, DELETE cho bạn.
+Dưới đây là cấu trúc Database và hướng dẫn từng bước để bạn thiết lập trên Supabase, cũng như cách điều chỉnh Frontend để kết nối.
+
+Bước 1: Tạo Database Schema trên Supabase
+Bạn hãy đăng nhập vào Supabase, tạo một Project mới. Sau đó vào mục SQL Editor, dán đoạn mã SQL dưới đây và chạy (Run) để tạo toàn bộ cấu trúc bảng:
+
+-- 1. Bảng Comments (Lời chúc của khách)
+CREATE TABLE comments (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    name TEXT NOT NULL,
+    is_presence BOOLEAN, -- true: có mặt, false: vắng mặt
+    content TEXT,
+    gif_id TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 2. Bảng Likes (Lượt thích bình luận)
+CREATE TABLE likes (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    comment_id UUID REFERENCES comments(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 3. Bảng Configs (Cấu hình thiệp cưới: ẩn/hiện mừng cưới, v.v...)
+CREATE TABLE configs (
+    key TEXT PRIMARY KEY,
+    value JSONB NOT NULL
+);
+
+-- Chèn dữ liệu cấu hình mẫu
+INSERT INTO configs (key, value) VALUES 
+('guest_book', '{"enabled": true}'),
+('music', '{"enabled": true, "autoplay": false}');
+
+
+Bước 2: Thiết lập Row Level Security (RLS) để bảo mật
+
+-- Kích hoạt RLS
+ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE likes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE configs ENABLE ROW LEVEL SECURITY;
+
+-- Cho phép TẤT CẢ mọi người (anon) được XEM danh sách lời chúc
+CREATE POLICY "Cho phép mọi người xem lời chúc" ON comments
+    FOR SELECT USING (true);
+
+-- Cho phép TẤT CẢ mọi người (anon) được GỬI lời chúc mới
+CREATE POLICY "Cho phép mọi người gửi lời chúc" ON comments
+    FOR INSERT WITH CHECK (true);
+
+-- Cho phép khách SỬA lời chúc của chính họ (nếu cần bảo mật cao hơn có thể tuỳ chỉnh, tạm thời mở public)
+CREATE POLICY "Cho phép cập nhật lời chúc" ON comments
+    FOR UPDATE USING (true);
+
+-- Cho phép xoá bình luận
+CREATE POLICY "Cho phép xoá lời chúc" ON comments
+    FOR DELETE USING (true);
+
+-- Cho phép mọi người xem và thả tim
+CREATE POLICY "Cho phép mọi người xem likes" ON likes FOR SELECT USING (true);
+CREATE POLICY "Cho phép mọi người tạo likes" ON likes FOR INSERT WITH CHECK (true);
+CREATE POLICY "Cho phép mọi người bỏ likes" ON likes FOR DELETE USING (true);
+
+-- Cấu hình chỉ cho phép đọc
+CREATE POLICY "Mọi người có thể đọc cấu hình" ON configs FOR SELECT USING (true);
+
+
+Bước 3: Chuẩn bị thông tin kết nối Supabase
+
+Sau khi tạo xong Project, bạn vào mục Project Settings -> API. Bạn sẽ cần 2 thông tin sau để điền vào index.html:
+1. Project URL (Ví dụ: https://rbflthgqhufykpomartl.supabase.co/rest/v1)
+2. Project API Keys (anon / public)
+
+Bước 4: Sửa file index.html của bạn
+Mở tệp /root/WeddingInvitation.com/index.html và tìm thẻ <body>. Cập nhật lại nó như sau:
+<!-- Đổi URL và thêm data-key -->
+<body 
+    data-url="https://rbflthgqhufykpomartl.supabase.co/rest/v1"
+    data-key="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJiZmx0aGdxaHVmeWtwb21hcnRsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg4NDc4ODksImV4cCI6MjA5NDQyMzg4OX0.zMklbxr0h1Q-ZHyA9dp0aVlkQYTPWNIADUgYrNlCuG0"
+>
+
+Bước 5: Kế hoạch Sửa Code Frontend (request.js và các thành phần khác)
+Do Supabase sử dụng cấu trúc API riêng (PostgREST), chúng ta sẽ cần sửa đổi frontend một chút.
+
+1. Trong src/js/connection/request.js: Chúng ta cần tự động thêm Header apikey và Authorization vào mỗi request.
+// Thêm vào request.js chỗ khởi tạo headers:
+const apiKey = document.body.getAttribute('data-key');
+const req = {
+    signal: ac.signal,
+    headers: new Headers({
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'apikey': apiKey,
+        'Authorization': `Bearer ${apiKey}`
+    }),
+    method: String(method).toUpperCase(),
+};
+
+2. Sửa đường dẫn API trong các file (ví dụ comment.js, like.js):
+- Lấy danh sách: /api/v2/comment $\rightarrow$ /comments?select=*,likes(count)
+- Thêm lời chúc mới: /api/comment $\rightarrow$ /comments
+- Thả tim: /api/comment/{id} $\rightarrow$ /likes (body chứa comment_id)
+
+Bạn có muốn tôi bắt tay vào sửa đổi trực tiếp các tệp JavaScript (request.js, comment.js, like.js...) trong mã nguồn của bạn để chúng tự động hoạt động với Supabase ngay bây giờ không?
