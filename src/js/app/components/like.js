@@ -53,11 +53,13 @@ export const like = (() => {
                     button.disabled = false;
                 });
         } else {
-            await request(HTTP_POST, '/api/comment/' + id)
+            // Supabase: POST /likes
+            await request(HTTP_POST, `/likes`)
                 .token(session.getToken())
-                .send(dto.uuidResponse)
-                .then((res) => {
-                    if (res.code === HTTP_STATUS_CREATED) {
+                .body({ comment_id: id }) // Supabase body
+                .send()
+                .then((res) => { // Supabase POST trả về mảng các đối tượng đã tạo
+                    if (res.data && res.data.length > 0) {
                         likes.set(id, res.data.uuid);
 
                         heart.classList.remove('fa-regular');
