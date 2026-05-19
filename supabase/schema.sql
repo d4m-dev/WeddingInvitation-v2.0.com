@@ -21,10 +21,51 @@ CREATE TABLE configs (
     value JSONB NOT NULL
 );
 
+-- 4. Bảng Profiles (Thông tin người dùng, bao gồm vai trò admin)
+CREATE TABLE profiles (
+    id UUID REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY,
+    username TEXT UNIQUE,
+    role TEXT DEFAULT 'user' NOT NULL, -- 'user' hoặc 'admin'
+    -- Thêm các trường khác nếu cần, ví dụ: name, avatar_url, v.v.
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Kích hoạt RLS cho bảng profiles
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+
+-- Policy: Chỉ người dùng đã xác thực mới có thể xem profile của chính họ
+CREATE POLICY "Người dùng có thể xem profile của chính họ" ON profiles
+    FOR SELECT USING (auth.uid() = id);
+
+-- Policy: Người dùng có thể cập nhật profile của chính họ
+CREATE POLICY "Người dùng có thể cập nhật profile của chính họ" ON profiles
+    FOR UPDATE USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
+
+-- Policy: Admin có thể xem tất cả profiles
+CREATE POLICY "Admin có thể xem tất cả profiles" ON profiles
+    FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
+
+-- Policy: Khi một người dùng mới được tạo trong auth.users, tự động tạo một profile tương ứng
+CREATE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.profiles (id, username, role)
+  VALUES (NEW.id, NEW.email, 'user'); -- Sử dụng email làm username ban đầu, bạn có thể điều chỉnh
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+
 -- Chèn dữ liệu cấu hình mẫu
 INSERT INTO configs (key, value) VALUES 
 ('guest_book', '{"enabled": true}'),
 ('music', '{"enabled": true, "autoplay": false}');
+
 -- Kích hoạt RLS
 ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE likes ENABLE ROW LEVEL SECURITY;
