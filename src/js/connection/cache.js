@@ -1,4 +1,5 @@
-import { request, cacheWrapper, HTTP_GET } from './request.js';
+import { request, HTTP_GET } from './request.js';
+import { cacheWrapper } from './cache-manager.js'; // Import cacheWrapper từ tệp quản lý mới
 
 export const cache = (cacheName) => {
 
@@ -132,8 +133,7 @@ export const cache = (cacheName) => {
         del,
         has,
         set,
-        get,
-        open,
+        get, // 'open' không được định nghĩa, loại bỏ khỏi export.
         download,
         /**
          * @param {number} v
