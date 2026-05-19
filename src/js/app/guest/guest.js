@@ -12,7 +12,7 @@ import { session } from '../../common/session.js';
 import { offline } from '../../common/offline.js';
 import { comment } from '../components/comment.js';
 import * as confetti from '../../libs/confetti.js';
-import { pool } from '../../connection/request.js';
+import { pool } from '../connection/cache-manager.js';
 
 export const guest = (() => {
 
