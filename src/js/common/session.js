@@ -26,50 +26,63 @@ export const session = (() => {
      * @returns {Promise<boolean>}
      */
     const login = (body) => {
-        return request(HTTP_POST, '/api/session')
-            .body(body)
-            .send(dto.tokenResponse)
-            .then((res) => {
-                if (res.code === HTTP_STATUS_OK) {
-                    setToken(res.data.token);
-                }
-
-                return res.code === HTTP_STATUS_OK;
-            });
+        util.notify('Chức năng đăng nhập cần sử dụng Supabase Authentication SDK.').info();
+        console.warn("Login function requires Supabase Authentication SDK.");
+        return Promise.resolve(false); // Tạm thời trả về false
+        // return request(HTTP_POST, '/api/session') // API này không có trong Supabase PostgREST
+        //     .body(body)
+        //     .send(dto.tokenResponse)
+        //     .then((res) => {
+        //         if (res.code === HTTP_STATUS_OK) {
+        //             setToken(res.data.token);
+        //         }
+        //         return res.code === HTTP_STATUS_OK;
+        //     });
     };
 
     /**
      * @returns {void}
      */
     const logout = () => ses.unset('token');
-
     /**
      * @returns {boolean}
      */
-    const isAdmin = () => String(getToken() ?? '.').split('.').length === 3;
+    const isAdmin = () => {
+        // Để kiểm tra vai trò admin thực sự, cần tích hợp Supabase Auth SDK
+        // và truy vấn bảng 'profiles' để lấy 'role' của người dùng.
+        // Hiện tại, chỉ kiểm tra xem token có phải là JWT hợp lệ không.
+        return String(getToken() ?? '.').split('.').length === 3;
+    };
 
     /**
      * @param {string} token
      * @returns {Promise<object>}
      */
     const guest = (token) => {
-        return request(HTTP_GET, '/api/v2/config')
+        // Supabase: GET /configs?select=*
+        return request(HTTP_GET, '/configs?select=*')
             .withCache(1000 * 60 * 30)
             .withForceCache()
             .token(token)
-            .send()
-            .then((res) => {
-                if (res.code !== HTTP_STATUS_OK) {
-                    throw new Error('Không thể lấy cấu hình.');
+            .send() // Supabase trả về mảng các đối tượng config
+            .then(({ data: configsData }) => {
+                if (!configsData || configsData.length === 0) {
+                    throw new Error('Không thể lấy cấu hình hoặc không có cấu hình nào.');
                 }
 
-                const config = storage('config');
-                for (const [k, v] of Object.entries(res.data)) {
-                    config.set(k, v);
+                const configStorage = storage('config');
+                // Supabase trả về mảng, cần chuyển đổi thành object { key: value }
+                const configObject = configsData.reduce((acc, item) => {
+                    acc[item.key] = item.value;
+                    return acc;
+                }, {});
+
+                for (const [k, v] of Object.entries(configObject)) {
+                    configStorage.set(k, v);
                 }
 
-                setToken(token);
-                return res;
+                setToken(token); // Lưu token (anon key)
+                return { data: configObject }; // Trả về định dạng tương tự như cũ
             });
     };
 
@@ -86,6 +99,17 @@ export const session = (() => {
         } catch {
             return null;
         }
+    };
+
+    /**
+     * @returns {string|null}
+     */
+    const getUserId = () => {
+        const decodedToken = decode();
+        // Trong JWT, user ID thường nằm trong trường 'sub' (subject)
+        // hoặc 'id' tùy thuộc vào cách Supabase cấu hình.
+        // Với Supabase Auth, nó thường là 'sub'.
+        return decodedToken?.sub || decodedToken?.id || null;
     };
 
     /**
@@ -116,5 +140,6 @@ export const session = (() => {
         isAdmin,
         setToken,
         getToken,
+        getUserId,
     };
 })();
